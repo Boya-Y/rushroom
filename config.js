@@ -52,7 +52,7 @@ const GameConfig = {
             name: '辅助',
             icon: '✨',
             baseAttack: 2,
-            baseHealth: 10,
+            baseHealth: 12,
             cost: 3,
             type: 'support',
             description: '辅助单位，攻击力低，生命值中等',
