@@ -6,17 +6,17 @@ const GameConfig = {
         'warrior': {
             name: '战士',
             icon: '⚔️',
-            baseAttack: 15,
-            baseHealth: 100,
+            baseAttack: 1,
+            baseHealth: 10,
             cost: 1,
             type: 'melee',
             description: '近战单位，攻击力中等，生命值较高'
         },
         'archer': {
-            name: '弓箭手',
+            name: '射手',
             icon: '🏹',
-            baseAttack: 20,
-            baseHealth: 60,
+            baseAttack: 2,
+            baseHealth: 10,
             cost: 2,
             type: 'ranged',
             description: '远程单位，攻击力高，生命值较低'
@@ -24,38 +24,39 @@ const GameConfig = {
         'mage': {
             name: '法师',
             icon: '🔮',
-            baseAttack: 25,
-            baseHealth: 50,
-            cost: 3,
+            baseAttack: 2,
+            baseHealth: 5,
+            cost: 1,
             type: 'magic',
             description: '魔法单位，攻击力很高，生命值很低'
         },
         'knight': {
-            name: '骑士',
+            name: '坦克',
             icon: '🛡️',
-            baseAttack: 12,
-            baseHealth: 120,
-            cost: 2,
+            baseAttack: 2,
+            baseHealth: 20,
+            cost: 4,
             type: 'tank',
             description: '坦克单位，攻击力较低，生命值很高'
         },
         'assassin': {
             name: '刺客',
             icon: '🗡️',
-            baseAttack: 30,
-            baseHealth: 40,
-            cost: 3,
+            baseAttack: 3,
+            baseHealth: 5,
+            cost: 2,
             type: 'assassin',
             description: '刺客单位，攻击力极高，生命值极低'
         },
         'priest': {
-            name: '牧师',
+            name: '辅助',
             icon: '✨',
-            baseAttack: 8,
-            baseHealth: 80,
-            cost: 2,
+            baseAttack: 2,
+            baseHealth: 10,
+            cost: 3,
             type: 'support',
-            description: '辅助单位，攻击力低，生命值中等'
+            description: '辅助单位，攻击力低，生命值中等',
+            baseHeal: 2 // 新增：基础治疗量（每有一次己方攻击触发，对全队治疗，受星级加成）
         }
     },
     
@@ -167,7 +168,7 @@ const GameConfig = {
     
     // 战斗参数
     battleSettings: {
-        attackDelay: 1000,      // 攻击间隔（毫秒）
+        attackDelay: 500,      // 攻击间隔（毫秒）
         animationDuration: 500, // 动画持续时间
         damageDisplayTime: 1000 // 伤害数字显示时间
     }
@@ -185,6 +186,8 @@ const ConfigUtils = {
             attack: Math.floor(baseUnit.baseAttack * multiplier.attack),
             health: Math.floor(baseUnit.baseHealth * multiplier.health),
             maxHealth: Math.floor(baseUnit.baseHealth * multiplier.health),
+            // 新增：导出治疗力（若该单位具备 baseHeal）
+            healPower: baseUnit.baseHeal ? Math.floor(baseUnit.baseHeal * multiplier.attack) : 0,
             star: star
         };
     },
@@ -210,6 +213,21 @@ const ConfigUtils = {
     // 检查是否可以购买单位
     canAffordUnit: function(unitId, currentGold) {
         return currentGold >= this.getUnitCost(unitId);
+    },
+    
+    // 新增：获取单位名称（若未配置则回退为unitId）
+    getUnitName: function(unitId) {
+        const u = GameConfig.units[unitId];
+        return u && u.name ? u.name : unitId;
+    },
+    
+    // 新增：根据成本推导稀有度标签
+    getUnitRarity: function(unitId) {
+        const cost = this.getUnitCost(unitId);
+        if (cost >= 4) return '传说';
+        if (cost === 3) return '史诗';
+        if (cost === 2) return '稀有';
+        return '普通';
     }
 };
 

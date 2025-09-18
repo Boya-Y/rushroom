@@ -16,6 +16,10 @@ class AutoChessGame {
         this.draggedUnit = null;
         this.draggedFrom = null;
         
+        // 点击布阵/卡牌点位模式状态
+        this.selectedCellIndex = null;     // 当前选中的我方格位用于换位
+        this.selectedShopIndex = null;     // 当前选中的商店卡牌用于点位落子
+        
         this.init();
     }
     
@@ -31,6 +35,11 @@ class AutoChessGame {
         // 首屏：渲染战场（敌方与我方）
         this.renderPlayerField();
         this.renderEnemyField();
+
+        // 根据设备方向/宽度应用布局（竖屏：敌上己下）
+        this.applyResponsiveLayout();
+        window.addEventListener('resize', () => this.applyResponsiveLayout());
+        window.addEventListener('orientationchange', () => this.applyResponsiveLayout());
     }
     
     // ========== 战场 & UI ==========
@@ -45,6 +54,8 @@ class AutoChessGame {
             cell.style.position = 'relative'; // 让飘字能以格子为定位参照
             cell.addEventListener('dragover', this.handleDragOver.bind(this));
             cell.addEventListener('drop', this.handleDrop.bind(this));
+            // 点击布阵：点击选择 → 点击目标格
+            cell.addEventListener('click', (e) => this.handleCellClick(e));
             playerGrid.appendChild(cell);
         }
         
@@ -61,6 +72,33 @@ class AutoChessGame {
         document.getElementById('round').textContent = this.gameState.round;
         document.getElementById('gold').textContent = this.gameState.gold;
         document.getElementById('health').textContent = this.gameState.health;
+    }
+
+    // 布局判断：当设备为纵向或屏幕窄于700px时，视为竖屏布局
+    isPortraitLayout() {
+        return window.matchMedia('(orientation: portrait)').matches || window.innerWidth <= 700 || window.innerHeight > window.innerWidth;
+    }
+
+    // 应用响应式布局：切换 body 的 portrait-mode 类
+    applyResponsiveLayout() {
+        const isPortrait = this.isPortraitLayout();
+        document.body.classList.toggle('portrait-mode', isPortrait);
+    }
+
+    // 实际视图状态（以 CSS 类为准），避免 JS 与样式判断不一致
+    isPortraitView() {
+        return document.body.classList.contains('portrait-mode');
+    }
+
+    // 最权威的布局判断：读取 .battlefield-container 的实际 flex-direction
+    isVerticalStackedLayout() {
+        const container = document.querySelector('.battlefield-container');
+        if (container) {
+            const dir = window.getComputedStyle(container).flexDirection;
+            if (dir && dir.startsWith('column')) return true; // 包含 column 与 column-reverse
+        }
+        // 兜底：退回到类/窗口判断
+        return this.isPortraitView() || this.isPortraitLayout();
     }
 
     // 控件显示：正常状态（显示刷新/开战，隐藏重开）
@@ -94,36 +132,26 @@ class AutoChessGame {
     
     // ========== 商店 ==========
     refreshShop(free = false) {
-        // 非免费刷新时需要判断金币是否足够
-        if (!free) {
-            const cost = GameConfig.gameSettings.shopRefreshCost;
-            if (this.gameState.gold < cost) return false;
+        const cost = GameConfig.gameSettings.shopRefreshCost;
+        if (!free && this.gameState.gold < cost) {
+            this.logMessage('金币不足，无法刷新商店');
+            return;
         }
+        
+        // 刷新时清除卡牌选择
+        this.selectedShopIndex = null;
         
         this.gameState.shop = [];
         for (let i = 0; i < GameConfig.gameSettings.shopSize; i++) {
             const unitId = ConfigUtils.getRandomUnitId();
-            const stats = ConfigUtils.calculateUnitStats(unitId, 1);
-            this.gameState.shop.push({
-                id: unitId,
-                star: 1,
-                name: stats.name ?? ConfigUtils.getUnitName(unitId),
-                icon: stats.icon ?? '',
-                cost: stats.cost ?? ConfigUtils.getUnitCost(unitId),
-                attack: stats.attack,
-                health: stats.health,
-                maxHealth: stats.maxHealth ?? stats.health
-            });
+            const cost = ConfigUtils.getUnitCost(unitId);
+            this.gameState.shop.push({ id: unitId, cost });
         }
-        
-        // 非免费刷新才扣费
         if (!free) {
             this.gameState.gold -= GameConfig.gameSettings.shopRefreshCost;
         }
-        
         this.renderShop();
         this.updateUI();
-        return true;
     }
 
     renderShop() {
@@ -131,27 +159,45 @@ class AutoChessGame {
         shopContainer.innerHTML = '';
         
         this.gameState.shop.forEach((unit, index) => {
+            const affordable = ConfigUtils.canAffordUnit(unit.id, this.gameState.gold);
+            const unitName = ConfigUtils.getUnitName(unit.id);
+            const rarity = ConfigUtils.getUnitRarity(unit.id);
+            const statsPreview = ConfigUtils.calculateUnitStats(unit.id, 1); // 商店展示1星属性
             const unitElement = document.createElement('div');
             unitElement.className = 'shop-unit';
-            unitElement.dataset.index = index;
+            if (affordable) unitElement.classList.add('affordable');
+            else unitElement.classList.add('expensive');
+            if (this.selectedShopIndex === index) unitElement.classList.add('selected');
             
-            if (ConfigUtils.canAffordUnit(unit.id, this.gameState.gold)) {
-                unitElement.classList.add('affordable');
-            } else {
-                unitElement.classList.add('expensive');
-            }
+            // 使用与战场相同的单位形象
+            const previewUnit = {
+                id: unit.id,
+                position: 0,
+                star: 1,
+                name: statsPreview.name ?? unitName,
+                icon: statsPreview.icon ?? '',
+                attack: statsPreview.attack,
+                health: statsPreview.health,
+                maxHealth: statsPreview.maxHealth ?? statsPreview.health,
+                type: statsPreview.type,
+                healPower: statsPreview.healPower || 0
+            };
+            const unitCard = this.createUnitElement(previewUnit, true); // 传 true 以禁用拖拽事件
+            unitElement.appendChild(unitCard);
+
+            // 简单显示费用
+            const costBadge = document.createElement('div');
+            costBadge.className = 'shop-unit-cost';
+            costBadge.textContent = `${unit.cost}`;
+            unitElement.appendChild(costBadge);
             
-            unitElement.innerHTML = `
-                <div class="shop-unit-cost">${unit.cost}</div>
-                <div class="unit-icon">${unit.icon}</div>
-                <div class="unit-name">${unit.name}</div>
-                <div class="unit-stats">
-                    <span class="unit-attack">${unit.attack}</span>
-                    <span class="unit-health">${unit.health}</span>
-                </div>
-            `;
-            
-            unitElement.addEventListener('click', () => this.buyUnit(index));
+            unitElement.addEventListener('click', () => {
+                if (this.isTouchDevice()) {
+                    this.onShopUnitClick(index);
+                } else {
+                    this.buyUnit(index);
+                }
+            });
             shopContainer.appendChild(unitElement);
         });
     }
@@ -162,32 +208,49 @@ class AutoChessGame {
         if (!unit || !ConfigUtils.canAffordUnit(unit.id, this.gameState.gold)) {
             return false;
         }
-        
+
         const unitId = unit.id;
-        
+
         // 扣费 + 移除商店 + 立即重绘商店（保证点击后马上从UI消失）
         this.gameState.gold -= unit.cost;
         this.gameState.shop.splice(shopIndex, 1);
         this.renderShop();
         this.updateUI();
-        
-        // 优先尝试“带着新买的这一枚”直接完成合成（不要求有空位）
-        const merged = this.attemptImmediateMerge(unitId, /*incoming*/ 1);
-        if (merged) {
-            this.renderPlayerField();
-            this.updateUI();
-            return true;
+
+        // 扩展规则：
+        // - 当场上已有同名2星×2 且 1星×2 时，这次购买直接以上场为3星（不删除其他单位）
+        // - 否则若场上已有同名1星×2，则这次购买直接以上场为2星（不删除其他单位）
+        // - 其他情况按1星上场
+        const count1 = this.getFieldUnitsByIdAndStar(unitId, 1).length;
+        const count2 = this.getFieldUnitsByIdAndStar(unitId, 2).length;
+        let starToPlace = 1;
+        if (count2 >= 2 && count1 >= 2) {
+            starToPlace = 3;
+        } else if (count1 >= 2) {
+            starToPlace = 2;
         }
-        
-        // 否则按常规：尝试上场，否则进背包
-        if (!this.addUnitToField(unitId, 1)) {
+
+        // 先尝试把单位以上述星级上到场上（若满则进背包）
+        const placedPos = this.addUnitToField(unitId, starToPlace);
+        if (placedPos == null) {
             const inv = this.gameState.inventory.get(unitId) || 0;
             this.gameState.inventory.set(unitId, inv + 1);
+        } else {
+            // 最后一步（你当前要求）：如果本次是高星落位（≥2星），删除场上除此新单位外的所有同名单位
+            if (starToPlace > 1) {
+                const toRemove = [];
+                for (const [pos, u] of this.gameState.playerUnits) {
+                    if (u.id === unitId && pos !== placedPos) {
+                        toRemove.push(pos);
+                    }
+                }
+                for (const pos of toRemove) {
+                    this.gameState.playerUnits.delete(pos);
+                }
+            }
         }
-        
-        // 可能由于上场导致可以继续合成（仅场上），做一次链式检查
-        this.checkAutoMergeChain(unitId);
-        
+
+        // 渲染与UI刷新
         this.renderPlayerField();
         this.updateUI();
         return true;
@@ -206,13 +269,15 @@ class AutoChessGame {
                     icon: stats.icon ?? '',
                     attack: stats.attack,
                     health: stats.health,
-                    maxHealth: stats.maxHealth ?? stats.health
+                    maxHealth: stats.maxHealth ?? stats.health,
+                    type: stats.type,
+                    healPower: stats.healPower || 0
                 };
                 this.gameState.playerUnits.set(i, unit);
-                return true;
+                return i; // 返回新单位的落位位置
             }
         }
-        return false;
+        return null; // 没有空位
     }
     
     getFieldUnitsByIdAndStar(unitId, star) {
@@ -268,7 +333,9 @@ class AutoChessGame {
                 icon: stats2.icon ?? '',
                 attack: stats2.attack,
                 health: stats2.health,
-                maxHealth: stats2.maxHealth ?? stats2.health
+                maxHealth: stats2.maxHealth ?? stats2.health,
+                type: stats2.type,
+                healPower: stats2.healPower || 0
             });
             this.logMessage(`${ConfigUtils.getUnitName(unitId)} 合成为 2 星！`);
             
@@ -303,6 +370,8 @@ class AutoChessGame {
             keep.u.maxHealth = upgraded.maxHealth ?? upgraded.health;
             keep.u.name = keep.u.name ?? upgraded.name ?? ConfigUtils.getUnitName(unitId);
             keep.u.icon = keep.u.icon ?? upgraded.icon ?? '';
+            keep.u.type = upgraded.type;
+            keep.u.healPower = upgraded.healPower || 0;
             
             this.gameState.playerUnits.delete(same[1].pos);
             this.gameState.playerUnits.delete(same[2].pos);
@@ -439,6 +508,149 @@ class AutoChessGame {
     }
     
     // ========== 敌方生成 ==========
+
+    // 设备判定：触屏
+    isTouchDevice() {
+        return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    }
+
+    // 触屏：点击商店卡牌，进入选择/取消状态
+    onShopUnitClick(index) {
+        if (this.gameState.inBattle) return;
+        if (this.selectedShopIndex === index) {
+            this.selectedShopIndex = null;
+            this.renderShop();
+            this.logMessage('已取消卡牌选择');
+            return;
+        }
+        const unit = this.gameState.shop[index];
+        if (!unit) return;
+        if (!ConfigUtils.canAffordUnit(unit.id, this.gameState.gold)) {
+            this.logMessage('金币不足，无法购买该单位');
+            return;
+        }
+        this.selectedShopIndex = index;
+        this.renderShop();
+        this.logMessage('已选择卡牌，请点棋盘目标格进行放置');
+    }
+
+    // 在指定格位购买并放置（支持占位替换）
+    buyUnitAtPosition(shopIndex, targetPos) {
+        const unit = this.gameState.shop[shopIndex];
+        if (!unit || !ConfigUtils.canAffordUnit(unit.id, this.gameState.gold)) {
+            return false;
+        }
+        const unitId = unit.id;
+        // 扣费 + 商店移除 + 重绘
+        this.gameState.gold -= unit.cost;
+        this.gameState.shop.splice(shopIndex, 1);
+        this.selectedShopIndex = null;
+        this.renderShop();
+        this.updateUI();
+        // 计算应以上场星级
+        const count1 = this.getFieldUnitsByIdAndStar(unitId, 1).length;
+        const count2 = this.getFieldUnitsByIdAndStar(unitId, 2).length;
+        let starToPlace = 1;
+        if (count2 >= 2 && count1 >= 2) starToPlace = 3; else if (count1 >= 2) starToPlace = 2;
+        // 若目标格有单位：将原单位移到第一个空格；若无空格则进背包
+        const occupant = this.gameState.playerUnits.get(targetPos);
+        if (occupant) {
+            let moved = false;
+            for (let i = 0; i < 16; i++) {
+                if (i === targetPos) continue;
+                if (!this.gameState.playerUnits.has(i)) {
+                    this.gameState.playerUnits.set(i, { ...occupant, position: i });
+                    moved = true;
+                    break;
+                }
+            }
+            if (!moved) {
+                const inv = this.gameState.inventory.get(occupant.id) || 0;
+                this.gameState.inventory.set(occupant.id, inv + 1);
+            }
+            this.gameState.playerUnits.delete(targetPos);
+        }
+        // 在目标格直接创建单位对象
+        const stats = ConfigUtils.calculateUnitStats(unitId, starToPlace);
+        const newUnit = {
+            id: unitId,
+            position: targetPos,
+            star: starToPlace,
+            name: stats.name ?? ConfigUtils.getUnitName(unitId),
+            icon: stats.icon ?? '',
+            attack: stats.attack,
+            health: stats.health,
+            maxHealth: stats.maxHealth ?? stats.health,
+            type: stats.type,
+            healPower: stats.healPower || 0
+        };
+        this.gameState.playerUnits.set(targetPos, newUnit);
+        // 若是高星落位，删除场上其余同名单位
+        if (starToPlace > 1) {
+            const toRemove = [];
+            for (const [pos, u] of this.gameState.playerUnits) {
+                if (u.id === unitId && pos !== targetPos) toRemove.push(pos);
+            }
+            toRemove.forEach(p => this.gameState.playerUnits.delete(p));
+        }
+        // 渲染
+        this.renderPlayerField();
+        this.updateUI();
+        return true;
+    }
+
+    // 点击玩家棋盘格：选中/换位，或处理卡牌点位落子
+    handleCellClick(e) {
+        if (this.gameState.inBattle) return;
+        const cell = e.currentTarget;
+        const pos = parseInt(cell.dataset.position);
+        const selected = this.selectedCellIndex;
+        const unitAtPos = this.gameState.playerUnits.get(pos);
+        // 若处于“卡牌点位落子”模式，则优先处理购买落子
+        if (this.selectedShopIndex != null) {
+            const ok = this.buyUnitAtPosition(this.selectedShopIndex, pos);
+            if (!ok) {
+                this.logMessage('购买失败，请检查金币或商店状态');
+            }
+            return;
+        }
+        // 没有已选择格：如果该格有单位 → 选中它
+        if (selected == null) {
+            if (unitAtPos) {
+                this.selectedCellIndex = pos;
+                cell.classList.add('selected');
+            }
+            return;
+        }
+        // 再次点击同一格：取消选中
+        if (selected === pos) {
+            this.clearSelectedCellHighlight();
+            this.selectedCellIndex = null;
+            return;
+        }
+        // 与另一格换位
+        const from = selected;
+        const movingUnit = this.gameState.playerUnits.get(from);
+        const toUnit = this.gameState.playerUnits.get(pos);
+        this.clearSelectedCellHighlight();
+        this.selectedCellIndex = null;
+        if (!movingUnit) return;
+        this.gameState.playerUnits.set(pos, { ...movingUnit, position: pos });
+        if (toUnit) {
+            this.gameState.playerUnits.set(from, { ...toUnit, position: from });
+        } else {
+            this.gameState.playerUnits.delete(from);
+        }
+        this.renderPlayerField();
+        this.checkAutoMergeChain(movingUnit.id);
+    }
+
+    // 清除棋盘中高亮的选中格
+    clearSelectedCellHighlight() {
+        const selectedEl = document.querySelector('#player-grid .grid-cell.selected');
+        if (selectedEl) selectedEl.classList.remove('selected');
+    }
+
     generateEnemyUnits() {
         this.gameState.enemyUnits.clear();
         const difficulty = ConfigUtils.getRoundDifficulty(this.gameState.round);
@@ -464,7 +676,9 @@ class AutoChessGame {
                 icon: stats.icon ?? '',
                 attack: stats.attack,
                 health: stats.health,
-                maxHealth: stats.maxHealth ?? stats.health
+                maxHealth: stats.maxHealth ?? stats.health,
+                type: stats.type,
+                healPower: stats.healPower || 0
             };
             
             const enemyBuffs = GameConfig.gameSettings.enemyBuffs;
@@ -593,12 +807,21 @@ class AutoChessGame {
     }
     
     findTarget(attacker, enemies, isPlayerAttacking) {
-        let frontColumns;
-        if (isPlayerAttacking) {
-            frontColumns = [0, 1, 2, 3]; // 敌方前排在列0
-        } else {
-            frontColumns = [3, 2, 1, 0]; // 我方前排在列3
+        // 上下对阵（竖屏堆叠）：按行扫描，优先“双方接壤行”
+        if (this.isVerticalStackedLayout()) {
+            const frontRows = isPlayerAttacking ? [3, 2, 1, 0] : [0, 1, 2, 3];
+            for (const r of frontRows) {
+                for (let c = 0; c < 4; c++) {
+                    const pos = r * 4 + c;
+                    const t = enemies.get(pos);
+                    if (t && t.health > 0) return t;
+                }
+            }
+            return null;
         }
+
+        // 左右对阵（横屏）：按列扫描，优先“双方接壤列”
+        const frontColumns = isPlayerAttacking ? [0, 1, 2, 3] : [3, 2, 1, 0];
         for (const c of frontColumns) {
             for (let r = 0; r < 4; r++) {
                 const pos = r * 4 + c;
@@ -627,68 +850,125 @@ class AutoChessGame {
         this.showDamageText(attack.target.position, damage, /*targetIsEnemyGrid*/ attack.isPlayer);
         this.updateHealthDisplay(attack.target.position, attack.target, /*targetIsEnemyGrid*/ attack.isPlayer);
         
+        // 攻击结算后：触发己方治疗（由己方场上所有 support 单位提供）
+        this.triggerTeamHeal(attack.isPlayer);
+        
         await this.sleep(300);
     }
-    
-    playAttackAnimation(position, isPlayer) {
-        const gridId = isPlayer ? 'player-grid' : 'enemy-grid';
-        const grid = document.getElementById(gridId);
-        const cell = grid.children[position];
-        const unit = cell?.querySelector('.unit');
-        if (unit) {
-            unit.classList.add('unit-attacking');
-            setTimeout(() => unit.classList.remove('unit-attacking'), 600);
-        }
+
+    // 触发己方群体治疗：统计己方所有辅助单位 healPower 之和，按该值为所有己方存活单位回血
+    triggerTeamHeal(isPlayerSide) {
+        const allies = isPlayerSide ? this.gameState.playerUnits : this.gameState.enemyUnits;
+        let totalHeal = 0;
+        allies.forEach(u => { if (u.type === 'support' && u.healPower > 0 && u.health > 0) totalHeal += u.healPower; });
+        if (totalHeal <= 0) return;
+        allies.forEach((u, pos) => {
+            if (u.health <= 0) return;
+            const old = u.health;
+            u.health = Math.min(u.maxHealth, u.health + totalHeal);
+            const gained = u.health - old;
+            if (gained > 0) {
+                // 飘绿色“+血”
+                this.showHealText(pos, gained, /*targetIsEnemyGrid*/ !isPlayerSide);
+                this.updateHealthDisplay(pos, u, /*targetIsEnemyGrid*/ !isPlayerSide);
+            }
+        });
     }
-    
-    playHitAnimation(position, targetIsEnemyGrid) {
+
+    // 绿色的治疗飘字
+    showHealText(position, heal, targetIsEnemyGrid) {
         const gridId = targetIsEnemyGrid ? 'enemy-grid' : 'player-grid';
         const grid = document.getElementById(gridId);
         const cell = grid.children[position];
-        const unit = cell?.querySelector('.unit');
-        if (unit) {
-            unit.classList.add('unit-hit');
-            setTimeout(() => unit.classList.remove('unit-hit'), 400);
+        if (!cell) return;
+        const healthElement = cell.querySelector('.health-text');
+        const healText = document.createElement('div');
+        healText.className = 'heal-text';
+        healText.textContent = `+${heal}`;
+        healText.style.position = 'absolute';
+        healText.style.left = '50%';
+        healText.style.transform = 'translateX(-50%)';
+        healText.style.pointerEvents = 'none';
+        if (healthElement) {
+            const topPx = Math.max(0, healthElement.offsetTop - 12);
+            healText.style.top = `${topPx}px`;
+        } else {
+            healText.style.top = '10px';
         }
+        cell.appendChild(healText);
+        setTimeout(() => {
+            if (healText.parentNode) healText.parentNode.removeChild(healText);
+        }, GameConfig.battleSettings.damageDisplayTime);
     }
-    
-    updateHealthDisplay(position, unit, targetIsEnemyGrid) {
-        const gridId = targetIsEnemyGrid ? 'enemy-grid' : 'player-grid';
-        const grid = document.getElementById(gridId);
-        const cell = grid.children[position];
-        const healthText = cell?.querySelector('.health-text');
-        if (healthText) healthText.textContent = unit.health;
-    }
-    
-    // 飘字定位：以格子的相对定位为参考，贴着 health-text 上方
+
+    // 红色的伤害飘字
     showDamageText(position, damage, targetIsEnemyGrid) {
         const gridId = targetIsEnemyGrid ? 'enemy-grid' : 'player-grid';
         const grid = document.getElementById(gridId);
         const cell = grid.children[position];
         if (!cell) return;
-        
         const healthElement = cell.querySelector('.health-text');
-        const damageText = document.createElement('div');
-        damageText.className = 'damage-text';
-        damageText.textContent = `-${damage}`;
-        damageText.style.position = 'absolute';
-        damageText.style.left = '50%';
-        damageText.style.transform = 'translateX(-50%)';
-        damageText.style.pointerEvents = 'none';
-        
+        const dmgText = document.createElement('div');
+        dmgText.className = 'damage-text';
+        dmgText.textContent = `-${damage}`;
+        dmgText.style.color = '#ff4d4f';
+        dmgText.style.fontWeight = 'bold';
+        dmgText.style.position = 'absolute';
+        dmgText.style.left = '50%';
+        dmgText.style.transform = 'translateX(-50%)';
+        dmgText.style.pointerEvents = 'none';
         if (healthElement) {
             const topPx = Math.max(0, healthElement.offsetTop - 12);
-            damageText.style.top = `${topPx}px`;
+            dmgText.style.top = `${topPx}px`;
         } else {
-            damageText.style.top = '10px';
+            dmgText.style.top = '10px';
         }
-        
-        cell.appendChild(damageText);
+        cell.appendChild(dmgText);
         setTimeout(() => {
-            if (damageText.parentNode) damageText.parentNode.removeChild(damageText);
+            if (dmgText.parentNode) dmgText.parentNode.removeChild(dmgText);
         }, GameConfig.battleSettings.damageDisplayTime);
     }
-    
+
+    // 更新某格的生命显示
+    updateHealthDisplay(position, unit, targetIsEnemyGrid) {
+        const gridId = targetIsEnemyGrid ? 'enemy-grid' : 'player-grid';
+        const grid = document.getElementById(gridId);
+        const cell = grid.children[position];
+        if (!cell) return;
+        const healthEl = cell.querySelector('.health-text');
+        if (healthEl) healthEl.textContent = `${unit.health}`;
+    }
+
+    // 攻击动画（轻微缩放）
+    playAttackAnimation(position, isPlayerSide) {
+        const gridId = isPlayerSide ? 'player-grid' : 'enemy-grid';
+        const grid = document.getElementById(gridId);
+        const cell = grid.children[position];
+        if (!cell) return;
+        const unitEl = cell.querySelector('.unit');
+        if (!unitEl) return;
+        unitEl.style.transition = 'transform 0.2s';
+        unitEl.style.transform = 'scale(1.1)';
+        setTimeout(() => {
+            unitEl.style.transform = 'scale(1)';
+        }, 200);
+    }
+
+    // 受击动画（短暂闪烁）
+    playHitAnimation(position, targetIsEnemyGrid) {
+        const gridId = targetIsEnemyGrid ? 'enemy-grid' : 'player-grid';
+        const grid = document.getElementById(gridId);
+        const cell = grid.children[position];
+        if (!cell) return;
+        const unitEl = cell.querySelector('.unit');
+        if (!unitEl) return;
+        const originalBg = unitEl.style.backgroundColor;
+        unitEl.style.transition = 'background-color 0.2s';
+        unitEl.style.backgroundColor = 'rgba(255,0,0,0.25)';
+        setTimeout(() => {
+            unitEl.style.backgroundColor = originalBg || '';
+        }, 200);
+    }
     restorePlayerUnitsHealth() {
         this.gameState.playerUnits.forEach(u => { u.health = u.maxHealth; });
         this.renderPlayerField();
