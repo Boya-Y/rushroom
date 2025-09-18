@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自走棋</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="config.js"></script>
+    <script src="game.js" defer></script>
+</head>
+<body>
+    <div class="game-container">
+        <div class="game-header">
+            <h1>自走棋</h1>
+            <div class="game-info">
+                <div>回合：<span id="round">1</span></div>
+                <div>金币：<span id="gold">0</span></div>
+                <div>生命：<span id="health">0</span></div>
+            </div>
+        </div>
+
+        <div class="battlefield-container">
+            <div class="battlefield player-field">
+                <h3>我方</h3>
+                <div id="player-grid" class="grid"></div>
+            </div>
+            <div class="battlefield enemy-field">
+                <h3>敌方</h3>
+                <div id="enemy-grid" class="grid"></div>
+            </div>
+        </div>
+
+        <div class="shop-container">
+            <h3>商店</h3>
+            <div id="shop" class="shop-units"></div>
+            <div class="shop-controls">
+                <button id="refresh-shop">刷新商店</button>
+                <button id="start-battle">开始战斗</button>
+                <button id="restart-game-btn" style="display: none;">重新开始</button>
+            </div>
+        </div>
+
+        <div class="battle-log">
+            <h4>战斗日志</h4>
+            <div id="log-content" class="log-content"></div>
+        </div>
+    </div>
+
+    <!-- 单位详情弹窗（保留） -->
+    <div id="unit-modal" class="unit-modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>单位详情</h3>
+            <div id="unit-detail"></div>
+        </div>
+    </div>
+</body>
+</html>
